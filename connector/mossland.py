@@ -38,7 +38,14 @@ DEFAULT_VERSION = "v20260410-streamparam-20260703"
 # approaching the input token cost of the same audio.
 # See: https://github.com/sgl-project/sglang-omni/pull/1034
 _OUTPUT_TOKENS_PER_AUDIO_SECOND = 10
-_DEFAULT_MAX_NEW_TOKENS = 65536  # fallback for short clips
+# Floor: don't go below the old default of 5120 (covers short clips with margin)
+_MIN_TOKENS = 5120
+# Cap at the model's 128K context window (131072). The model's max_position_embeddings
+# was raised from 40960 to 131072 on Jul 6, enabling 90-min audio.
+_MAX_TOKENS = 131072
+# Audio over this duration exceeds the model's context limit (~164 min per sglang-omni #1034)
+# and should be rejected with a clear error rather than sent to the API.
+_MAX_AUDIO_DURATION_S = 5400  # 90 minutes (conservative; model can do ~164 min)
 
 # The model emits a time marker every 5 seconds, so a valid segment end
 # can overshoot the audio tail by up to one marker interval. Anything past
@@ -47,13 +54,21 @@ _TIMESTAMP_TOLERANCE_S = 5.0
 
 
 def _scaled_max_new_tokens(audio_duration_s: float) -> str:
-    """Scale max_new_tokens with audio duration, capped at the 128K context."""
+    """Scale max_new_tokens with audio duration.
+
+    Formula: tokens = duration * tokens_per_second
+    - Floored at _MIN_TOKENS (5120) for short clips
+    - Capped at _MAX_TOKENS (131072) for context window
+    - 2x headroom over observed 4.5 tokens/sec for dense meetings
+
+    See: https://github.com/sgl-project/sglang-omni/pull/1034
+    """
     if audio_duration_s <= 0:
-        tokens = _DEFAULT_MAX_NEW_TOKENS
+        tokens = _MIN_TOKENS
     else:
         tokens = int(audio_duration_s * _OUTPUT_TOKENS_PER_AUDIO_SECOND)
-        tokens = max(tokens, 5120)  # floor: don't go below the old default
-        tokens = min(tokens, 131072)  # cap at context window
+        tokens = max(tokens, _MIN_TOKENS)
+        tokens = min(tokens, _MAX_TOKENS)
     return json.dumps({"max_new_tokens": tokens, "temperature": 0})
 
 
@@ -149,6 +164,13 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
         # Transport mode: controls which methods are used and fallback order.
         # See _TRANSPORT_* constants above for available modes.
         self.transport_mode = os.environ.get("MOSSLAND_TRANSPORT", _TRANSPORT_AUTO).lower()
+        # Tokens per audio second for duration-scaled max_new_tokens.
+        # Default: 10 (2x headroom over observed 4.5 for dense meetings).
+        # Lower for sparse audio (podcasts with silence); raise for dense overlapping speech.
+        self.tokens_per_second = float(os.environ.get("MOSSLAND_TOKENS_PER_SEC", "10"))
+        # Max audio duration the connector will accept (seconds). Audio over this
+        # limit is rejected with a clear error rather than sent to the API.
+        self.max_audio_duration = float(os.environ.get("MOSSLAND_MAX_AUDIO_DURATION", "5400"))
         # Polling config (for async fallback mode)
         self.poll_interval = float(os.environ.get("MOSSLAND_POLL_INTERVAL", "5.0"))
         self.poll_timeout = float(os.environ.get("MOSSLAND_POLL_TIMEOUT", "1800"))
@@ -189,6 +211,20 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
             logger.debug(f"Could not determine audio duration: {e}")
         return 0.0
 
+    def _scaled_max_new_tokens_configurable(self, audio_duration_s: float) -> str:
+        """Scale max_new_tokens with audio duration using configurable rate.
+
+        Uses self.tokens_per_second (default 10, 2x headroom over observed 4.5).
+        Floored at _MIN_TOKENS (5120), capped at _MAX_TOKENS (131072).
+        """
+        if audio_duration_s <= 0:
+            tokens = _MIN_TOKENS
+        else:
+            tokens = int(audio_duration_s * self.tokens_per_second)
+            tokens = max(tokens, _MIN_TOKENS)
+            tokens = min(tokens, _MAX_TOKENS)
+        return json.dumps({"max_new_tokens": tokens, "temperature": 0})
+
     def transcribe(self, request: TranscriptionRequest) -> TranscriptionResponse:
         """
         Transcribe audio using the Mossland API with SSE streaming.
@@ -203,11 +239,19 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
             # Get audio duration for duration-scaled max_new_tokens (sglang-omni #1034)
             audio_duration = self._get_audio_duration(audio_bytes, request.filename or "")
 
+            # Reject audio that exceeds the model's context limit
+            if audio_duration > 0 and audio_duration > self.max_audio_duration:
+                raise TranscriptionError(
+                    f"Audio duration ({audio_duration:.0f}s) exceeds the maximum "
+                    f"supported duration ({self.max_audio_duration:.0f}s). "
+                    f"Use a shorter file or split the audio."
+                )
+
             # Determine sampling_params: scale with duration unless explicitly set
             if self._fixed_sampling_params:
                 sampling_params = self._fixed_sampling_params
             else:
-                sampling_params = _scaled_max_new_tokens(audio_duration)
+                sampling_params = self._scaled_max_new_tokens_configurable(audio_duration)
 
             # Build multipart form data
             files = {"file": (request.filename, audio_bytes, request.mime_type or "audio/mpeg")}
