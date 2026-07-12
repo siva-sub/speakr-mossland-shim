@@ -347,3 +347,19 @@ MIT. The underlying models and services have their own licenses:
 - [MOSS-Transcribe-Diarize](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize) — Apache 2.0
 - [speakr](https://github.com/murtaza-nasir/speakr) — AGPL-3.0
 - Mossland API — commercial (per-minute credits)
+## Community
+
+This project is listed as a community ASR backend in the [speakr GitHub issues](https://github.com/murtaza-nasir/speakr/issues/329).
+
+speakr's connector table currently shows:
+
+| Option | Setup | Speaker Diarization |
+|--------|-------|:---:|
+| OpenAI Transcribe | API key | Yes |
+| WhisperX ASR | GPU container | Yes |
+| Mistral Voxtral | API key | Yes |
+| VibeVoice ASR | Self-hosted (vLLM) | Yes |
+| AssemblyAI | API key | Yes |
+| **MOSS-TD (this shim)** | **Mossland API key** | **Yes** |
+
+Our approach uses speakr's existing `openai_transcribe` connector — no speakr code changes or PRs needed. If there's community interest, a native `mossland` connector could be contributed to speakr's registry (similar to how [SenseVoice was added](https://github.com/murtaza-nasir/speakr/pull/311)).
