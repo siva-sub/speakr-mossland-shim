@@ -420,3 +420,109 @@ To submit this as a PR to speakr (like [SenseVoice #311](https://github.com/murt
 3. Register in `__init__.py` and `registry.py`
 4. Add `config/env.mossland.example`
 5. Submit PR (CLA required — see speakr's `CONTRIBUTING.md`)
+
+## Issues found during testing
+
+| # | Issue | Fix | Commit |
+|---|---|---|---|
+| 1 | SSE stream truncates for audio > 30 min | Auto mode detects <90% coverage → falls back to async polling | 6436e77 |
+| 2 | `stream:unsupported_with_async` — API rejects both params | Remove `stream=true` before async fallback | 3facd52 |
+| 3 | `httpx.Timeout` missing required params | Added all 4 (connect, read, write, pool) | b68fd9f |
+| 4 | Server disconnects on large uploads (13MB+) | 3-attempt retry with 2s backoff | b68fd9f |
+
+## Quality comparison: MOSS-TD vs ElevenLabs Scribe 2
+
+55-min recording, 3 speakers, compared on text content and speaker attribution:
+
+### Text volume
+
+| Metric | Scribe 2 | MOSS-TD |
+|---|---:|---:|
+| Segments | 908 | 1,117 |
+| Words | 12,161 | 11,248 (92.5%) |
+| Per-window ratio (5-min) | baseline | 86–97% (consistent) |
+| Word overlap (first 5 min) | — | 79.3% unique word match |
+
+### What MOSS captures differently
+
+- **Misses**: filler words (`uh`, `mm`, `the-`), non-speech events (`[tsking]`, `[chuckles]`), sentence restarts
+- **Adds**: cleaner text, some words Scribe missed (`regular`, `financial`, `restructured`)
+- **Key phrases**: 9/10 captured by both (tokenization, blockchain, Ethereum, compliance, playbook, architecture, orchestration, country, decision)
+
+### Speaker accuracy (single-pass, 95.4% agreement)
+
+| Speaker | Accuracy | Segments |
+|---|---:|---:|
+| Speaker 1 | 87.8% | 626 |
+| Speaker 2 | 91.2% | 614 |
+| Speaker 3 | 76.9% | 234 |
+
+Errors evenly distributed (2.7–10% per 5-min segment) — no chunk-boundary spikes.
+
+## Submitting a PR to speakr
+
+To contribute the native connector upstream (like [SenseVoice #311](https://github.com/murtaza-nasir/speakr/pull/311)):
+
+### Files to include in the PR
+
+| File | What it does |
+|---|---|
+| `src/services/transcription/connectors/mossland.py` | The connector (from `connector/mossland.py` in this repo) |
+| `src/services/transcription/connectors/__init__.py` | Add import + `__all__` entry |
+| `src/services/transcription/registry.py` | Register `mossland` in `_register_builtin_connectors` |
+| `config/env.mossland.example` | Env template (from `connector/env.mossland.example`) |
+
+### Steps
+
+1. Fork `murtaza-nasir/speakr`
+2. Copy `connector/mossland.py` → `src/services/transcription/connectors/mossland.py`
+3. Edit `connectors/__init__.py`:
+   ```python
+   from .mossland import MosslandTranscriptionConnector
+   # Add to __all__:
+   'MosslandTranscriptionConnector',
+   ```
+4. Edit `registry.py` in `_register_builtin_connectors`:
+   ```python
+   from .connectors.mossland import MosslandTranscriptionConnector
+   self.register('mossland', MosslandTranscriptionConnector)
+   ```
+5. Copy `connector/env.mossland.example` → `config/env.mossland.example`
+6. Sign the [CLA](https://github.com/murtaza-nasir/speakr/blob/master/CLA.md) (comment on the PR: "I have read the CLA Document and I hereby sign the CLA")
+7. Submit PR with title: `feat: add MOSS-Transcribe-Diarize connector (Mossland API)`
+
+### PR description template
+
+```markdown
+## Summary
+
+- Add Mossland connector for MOSS-Transcribe-Diarize via the Mossland/MOSI hosted API
+- SSE streaming (primary) + async polling (fallback) + 5-min chunking (last resort)
+- Single-pass up to 90-min audio with duration-scaled max_new_tokens (sglang-omni #1034)
+- Dynamic model discovery from GET /v1/models
+- Timestamp sanitization (sglang-omni #1034)
+- Configurable transport mode (MOSSLAND_TRANSPORT: auto/stream/async/chunk)
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| TRANSCRIPTION_API_KEY | (required) | Mossland API key |
+| MOSSLAND_MODEL | moss-transcribe-diarize | Model (auto-discovered from API) |
+| MOSSLAND_TRANSPORT | auto | Transport mode |
+| ... | ... | (see env.mossland.example) |
+
+## Testing
+
+Tested on a 55-min, 3-speaker recording:
+- 2-min file: 10.3s, 8 segments, SSE streaming ✅
+- 55-min file: 8.7 min, 666 segments, full coverage, 3 consistent speakers ✅
+- 95.4% speaker accuracy vs ElevenLabs Scribe 2
+```
+
+### What happens after the PR
+
+- The maintainer reviews and may request changes
+- The CLA must be signed before merge
+- Once merged, the connector ships in the next speakr release
+- Users configure it with `TRANSCRIPTION_CONNECTOR=mossland` — no shim needed
