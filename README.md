@@ -97,26 +97,187 @@ Add to `~/.pi/agent/mcp.json`:
 }
 ```
 
-Create `mcp/.env` with:
+Create `mcp/.env` (gitignored — never commit your token):
 
+```bash
+cp mcp/.env.example mcp/.env  # edit: paste your speakr API token
 ```
+
+```env
 SPEAKR_TOKEN=your-speakr-api-token
 SPEAKR_URL=http://127.0.0.1:8899
 SHIM_URL=http://127.0.0.1:8001
 ```
 
-### Available tools
+The `run.sh` launcher sources `mcp/.env` and starts the Python MCP server. Pi launches it on first tool call (`lifecycle: lazy`).
 
-- **Recording management**: upload, list, get, update, delete, status
-- **Transcript**: get full transcript with speakers and timestamps
-- **Summary**: get, generate, replace AI summaries
-- **Chat**: ask questions about any recording
-- **Speakers**: get, rename, auto-identify, global library CRUD
-- **Organization**: folders, tags, notes
-- **Shim**: health check, direct transcription (bypass speakr)
-- **Auto-start**: Docker containers start automatically if down
+### Register in Claude Desktop
 
-See `skills/speakr/SKILL.md` for the full 37-tool reference.
+Add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "speakr": {
+      "command": "bash",
+      "args": ["/path/to/speakr-mossland-shim/mcp/run.sh"],
+      "env": {
+        "SPEAKR_TOKEN": "your-speakr-api-token",
+        "SPEAKR_URL": "http://127.0.0.1:8899",
+        "SHIM_URL": "http://127.0.0.1:8001"
+      }
+    }
+  }
+}
+```
+
+### Getting a speakr API token
+
+1. Start speakr (`docker compose up -d`)
+2. Open `http://localhost:8899` and register an account
+3. Go to **Account → API Keys** and create a token
+4. Paste it into `mcp/.env`
+
+### Available tools (37 total)
+
+#### Recordings (7)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_upload` | Upload audio/video, auto-compress to 16kHz mono, auto-start containers, auto-queue transcription |
+| `speakr_list_recordings` | List with pagination, filters (folder, tag, status, search) |
+| `speakr_get_recording` | Get full details for one recording |
+| `speakr_update_recording` | Update title, meeting_date, folder, note |
+| `speakr_delete_recording` | Delete a recording |
+| `speakr_get_status` | Poll processing status |
+
+#### Transcript (1)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_get_transcript` | Get full transcript with speaker labels and timestamps |
+
+#### Summary (3)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_get_summary` | Get the AI-generated summary |
+| `speakr_summarize` | Queue/regenerate summary (optional custom prompt) |
+| `speakr_replace_summary` | Replace summary text manually |
+
+#### Chat (1)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_chat` | Ask questions about a recording (uses transcript as context) |
+
+#### Speakers — per recording (3)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_get_speakers` | Get speakers detected in a recording |
+| `speakr_assign_speakers` | **Rename speaker labels** (e.g. S01 → "Alice") |
+| `speakr_identify_speakers` | Auto-identify speakers via LLM |
+
+#### Speakers — global library (4)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_list_speakers` | List all known speakers |
+| `speakr_create_speaker` | Create a new speaker profile |
+| `speakr_update_speaker` | Update a speaker's name/description |
+| `speakr_delete_speaker` | Delete a speaker profile |
+
+#### Transcription control (2)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_transcribe` | Queue or re-queue transcription |
+| `speakr_batch_transcribe` | Queue multiple recordings at once |
+
+#### Folders (4)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_list_folders` | List all folders |
+| `speakr_create_folder` | Create a folder |
+| `speakr_update_folder` | Rename a folder |
+| `speakr_delete_folder` | Delete a folder |
+
+#### Tags (4)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_list_tags` | List all tags |
+| `speakr_create_tag` | Create a tag |
+| `speakr_add_tag` | Add a tag to a recording |
+| `speakr_remove_tag` | Remove a tag from a recording |
+
+#### Notes (2)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_get_notes` | Get notes for a recording |
+| `speakr_update_notes` | Replace notes for a recording |
+
+#### Meta (4)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_get_stats` | System statistics (storage, queue, recordings) |
+| `speakr_get_user` | Current user profile and preferences |
+| `speakr_get_transcription_info` | Active connector and capabilities |
+| `speakr_toggle_auto_summarization` | Toggle auto-summarization on/off |
+
+#### Shim tools (2)
+
+| Tool | Purpose |
+|------|---------|
+| `speakr_shim_health` | Check the mossland-shim health (streaming mode, model version, key status). Auto-starts containers if down. |
+| `speakr_shim_transcribe` | Transcribe audio directly through the shim, bypassing speakr. SSE streaming + single-pass. |
+
+### Auto-start behavior
+
+The MCP server automatically checks if the `mossland-shim` and `speakr` Docker containers are running before every upload and health check. If either is stopped, it runs `docker start <name>` to bring it back up. No manual intervention needed after reboots or crashes.
+
+### Example: upload and rename speakers
+
+```python
+# Via MCP tool call (from Pi, Claude Desktop, etc.):
+
+# 1. Upload (auto-compresses to 16kHz mono, auto-starts containers)
+speakr_upload(file_path="/path/to/meeting.mp3", title="Team Meeting")
+# → {"id": 1, "status": "PENDING"}
+
+# 2. Wait for transcription (poll status)
+speakr_get_status(recording_id=1)
+# → {"status": "COMPLETED"}
+
+# 3. Get the transcript with speakers
+speakr_get_transcript(recording_id=1)
+# → {"segments": [{"speaker": "S01", "start": 0.1, "end": 5.2, "text": "..."}, ...]}
+
+# 4. Rename speakers
+speakr_assign_speakers(
+    recording_id=1,
+    speaker_map={
+        "S01": "Alice",
+        "S02": {"name": "Bob", "isMe": true},
+        "S03": "Charlie"
+    }
+)
+# → {"success": true, "participants": "Alice, Bob, Charlie"}
+
+# 5. Get the AI summary
+speakr_get_summary(recording_id=1)
+# → {"summary": "### Minutes\n\n..."}
+
+# 6. Chat about the recording
+speakr_chat(recording_id=1, message="What were the key decisions?")
+# → {"response": "The team decided to..."}
+```
+
+See `skills/speakr/SKILL.md` for the full skill with anti-patterns, tips, and troubleshooting.
 
 ## Configuration
 
