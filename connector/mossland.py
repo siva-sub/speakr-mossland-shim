@@ -434,7 +434,7 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
         segments = []
         full_text = ""
 
-        timeout = httpx.Timeout(connect=120.0, read=None, write=120.0, pool=120.0)
+        timeout = httpx.Timeout(connect=120.0, read=None, write=300.0, pool=120.0)
 
         with httpx.Client(timeout=timeout) as client:
             with client.stream(
@@ -490,14 +490,25 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
         """Transcribe via async task + polling (fallback mode)."""
         data["async"] = "true"
 
-        with httpx.Client(timeout=httpx.Timeout(connect=60.0, read=1800.0)) as client:
-            # Submit task
-            r = client.post(
-                f"{self.base_url}/v1/audio/transcriptions",
-                files=files,
-                data=data,
-                headers=self.headers,
-            )
+        timeout = httpx.Timeout(connect=120.0, read=1800.0, write=300.0, pool=120.0)
+        with httpx.Client(timeout=timeout) as client:
+            # Submit task (retry up to 3 times on connection errors)
+            last_err = None
+            for attempt in range(3):
+                try:
+                    r = client.post(
+                        f"{self.base_url}/v1/audio/transcriptions",
+                        files=files,
+                        data=data,
+                        headers=self.headers,
+                    )
+                    break
+                except httpx.RemoteProtocolError as e:
+                    last_err = e
+                    logger.warning(f"POST attempt {attempt+1}/3 failed: {e}")
+                    time.sleep(2)
+            else:
+                raise ProviderError(f"Mossland API connection failed after 3 attempts: {last_err}", provider=self.PROVIDER_NAME, status_code=502)
             if r.status_code != 200:
                 raise ProviderError(
                     f"Mossland API error: {r.text[:500]}",
