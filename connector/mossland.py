@@ -52,6 +52,27 @@ _MAX_AUDIO_DURATION_S = 5400  # 90 minutes (conservative; model can do ~164 min)
 # that is a corrupted timestamp token and should be clamped.
 _TIMESTAMP_TOLERANCE_S = 5.0
 
+# Model registry — each model declares its capabilities, like the OpenAI
+# Transcribe connector does. This lets the UI show a model dropdown and
+# lets the connector validate that the requested model is supported.
+# Extend this dict when new MOSS models are released.
+_MODELS: dict[str, dict[str, Any]] = {
+    "moss-transcribe-diarize": {
+        "supports_diarization": True,
+        "max_duration_seconds": _MAX_AUDIO_DURATION_S,
+        "recommended_chunk_seconds": _MAX_AUDIO_DURATION_S,
+        "requires_version": True,
+        "description": "MOSS-Transcribe-Diarize Pro — multi-speaker with diarization + timestamps",
+    },
+    "moss-transcribe": {
+        "supports_diarization": False,
+        "max_duration_seconds": _MAX_AUDIO_DURATION_S,
+        "recommended_chunk_seconds": _MAX_AUDIO_DURATION_S,
+        "requires_version": False,
+        "description": "MOSS-Transcribe — single-speaker ASR",
+    },
+}
+
 
 def _scaled_max_new_tokens(audio_duration_s: float) -> str:
     """Scale max_new_tokens with audio duration.
@@ -95,7 +116,6 @@ def _sanitize_segments(
     if repaired:
         logger.warning("Clamped %d segments with timestamps outside audio duration", repaired)
     return segments
-DEFAULT_SAMPLING_PARAMS = '{"max_new_tokens":65536,"temperature":0}'
 
 # Transport modes (controllable via MOSSLAND_TRANSPORT env var):
 #   auto     — SSE streaming → async poll → 5-min chunking (default, cascading fallback)
@@ -149,14 +169,20 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
         Args:
             config: Configuration dict with keys:
                 - api_key: Mossland API key (required)
-                - base_url: API base URL (default: https://api.mosi.cn)
-                - model: Model name (default: moss-transcribe-diarize)
+                - base_url: API base URL (default: from MOSSLAND_BASE_URL env or https://api.mosi.cn)
+                - model: Model name (default: from MOSSLAND_MODEL env or moss-transcribe-diarize)
         """
         super().__init__(config)
 
         self.api_key = config["api_key"]
-        self.base_url = config.get("base_url", "https://api.mosi.cn").rstrip("/")
-        self.model = config.get("model", "moss-transcribe-diarize")
+        self.base_url = (
+            config.get("base_url")
+            or os.environ.get("MOSSLAND_BASE_URL", "https://api.mosi.cn").rstrip("/")
+        )
+        self.model = (
+            config.get("model")
+            or os.environ.get("MOSSLAND_MODEL", "moss-transcribe-diarize")
+        )
         self.version = os.environ.get("MOSSLAND_VERSION", DEFAULT_VERSION)
         # If MOSSLAND_SAMPLING_PARAMS is set, use it; otherwise we scale
         # dynamically based on audio duration (see _scaled_max_new_tokens).
@@ -170,7 +196,7 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
         self.tokens_per_second = float(os.environ.get("MOSSLAND_TOKENS_PER_SEC", "10"))
         # Max audio duration the connector will accept (seconds). Audio over this
         # limit is rejected with a clear error rather than sent to the API.
-        self.max_audio_duration = float(os.environ.get("MOSSLAND_MAX_AUDIO_DURATION", "5400"))
+        self.max_audio_duration = float(os.environ.get("MOSSLAND_MAX_AUDIO_DURATION", str(_MAX_AUDIO_DURATION_S)))
         # Polling config (for async fallback mode)
         self.poll_interval = float(os.environ.get("MOSSLAND_POLL_INTERVAL", "5.0"))
         self.poll_timeout = float(os.environ.get("MOSSLAND_POLL_TIMEOUT", "1800"))
@@ -185,6 +211,71 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
             "Authorization": f"Bearer {self.api_key}",
             "User-Agent": "Speakr/1.0 (https://github.com/murtaza-nasir/speakr)",
         }
+
+        # Discover available models from the API (dynamic, not hardcoded).
+        # Falls back to the _MODELS dict if the API call fails.
+        self._discovered_models: dict[str, dict[str, Any]] = {}
+        self._fetch_models()
+
+        # Validate the requested model
+        if self.model not in self._discovered_models and self.model not in _MODELS:
+            available = sorted(set(self._discovered_models.keys()) | set(_MODELS.keys()))
+            raise ConfigurationError(
+                f"Unknown model: {self.model}. Valid models: {available}"
+            )
+
+        # Set model-specific specs dynamically
+        model_info = self._discovered_models.get(self.model) or _MODELS.get(self.model, {})
+        self.SPECIFICATIONS = ConnectorSpecifications(
+            max_file_size_bytes=100 * 1024 * 1024,
+            max_duration_seconds=model_info.get("max_duration_seconds", _MAX_AUDIO_DURATION_S),
+            handles_chunking_internally=True,
+            recommended_chunk_seconds=model_info.get("recommended_chunk_seconds", _MAX_AUDIO_DURATION_S),
+        )
+
+    def _fetch_models(self) -> None:
+        """Fetch available models from GET /v1/models and populate _discovered_models.
+
+        Filters to transcription models (containing 'transcribe' in the id).
+        Falls back to the hardcoded _MODELS dict if the API call fails.
+        """
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                r = client.get(
+                    f"{self.base_url}/v1/models",
+                    headers=self.headers,
+                )
+            if r.status_code == 200:
+                for m in r.json().get("data", []):
+                    model_id = m.get("id", "")
+                    if "transcribe" in model_id.lower():
+                        # Start with the hardcoded specs, override with API-discovered info
+                        base = _MODELS.get(model_id, {})
+                        self._discovered_models[model_id] = {
+                            "supports_diarization": "diarize" in model_id.lower() or base.get("supports_diarization", False),
+                            "max_duration_seconds": base.get("max_duration_seconds", _MAX_AUDIO_DURATION_S),
+                            "recommended_chunk_seconds": base.get("recommended_chunk_seconds", _MAX_AUDIO_DURATION_S),
+                            "requires_version": base.get("requires_version", "diarize" in model_id.lower()),
+                            "description": base.get("description", f"MOSS model: {model_id}"),
+                            "owned_by": m.get("owned_by", "unknown"),
+                        }
+                logger.info(
+                    f"Discovered {len(self._discovered_models)} transcription models from API: "
+                    f"{list(self._discovered_models.keys())}"
+                )
+        except Exception as e:
+            logger.warning(f"Could not fetch models from API ({e}), using hardcoded list")
+            self._discovered_models = dict(_MODELS)
+
+    def _model_supports_diarization(self) -> bool:
+        """Check if the current model supports diarization."""
+        model_info = self._discovered_models.get(self.model) or _MODELS.get(self.model, {})
+        return model_info.get("supports_diarization", False)
+
+    def _model_requires_version(self) -> bool:
+        """Check if the current model requires the version parameter."""
+        model_info = self._discovered_models.get(self.model) or _MODELS.get(self.model, {})
+        return model_info.get("requires_version", False)
 
     def _validate_config(self) -> None:
         if not self.config.get("api_key"):
@@ -255,12 +346,17 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
 
             # Build multipart form data
             files = {"file": (request.filename, audio_bytes, request.mime_type or "audio/mpeg")}
+            # Build form data — only include params the model needs
             data = {
                 "model": effective_model,
-                "version": self.version,
-                "diarize": "true",
                 "sampling_params": sampling_params,
             }
+            # version is required for moss-transcribe-diarize per the API docs
+            if self._model_requires_version():
+                data["version"] = self.version
+            # diarize=true only for diarization-capable models
+            if self._model_supports_diarization():
+                data["diarize"] = "true"
 
             # Add hotwords if provided
             if request.hotwords:
@@ -520,7 +616,10 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
 
     @staticmethod
     def available_models() -> list[str]:
-        return ["moss-transcribe-diarize", "moss-transcribe"]
+        # Returns dynamically discovered models (from GET /v1/models) if available,
+        # otherwise falls back to the hardcoded _MODELS dict.
+        # The instance method _fetch_models() populates _discovered_models at init.
+        return sorted(set(_MODELS.keys()))
 
     @staticmethod
     def available_langs() -> list[str]:
