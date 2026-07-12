@@ -3,7 +3,7 @@ name: speakr
 description: "Self-hosted audio transcription, speaker diarization, and AI summarization via the speakr MCP server. Use when the user wants to transcribe audio/video, rename speakers, generate summaries, or chat about recordings. Powered by MOSS-Transcribe-Diarize (via Mossland API) for STT and GLM-5.2 (via Ollama cloud) for summaries/chat."
 license: MIT
 metadata:
-  author: siva
+  author: siva-sub
   version: '0.3.0'
 ---
 
@@ -345,12 +345,12 @@ docker rm -f speakr mossland-shim
 docker volume rm speakr-data
 
 # Rebuild the shim image
-docker build -t mossland-shim:local /home/siva/mossland-shim
+docker build -t mossland-shim:local ./shim
 
 # Start the shim
 docker run -d --name mossland-shim --restart unless-stopped \
   -p 127.0.0.1:8001:8000 \
-  --env-file /home/siva/mossland-shim/.env \
+  --env-file ./shim/.env \
   -e MOSI_BASE_URL=https://api.mosi.cn \
   -e MOSI_DEFAULT_MODEL=moss-transcribe-diarize \
   mossland-shim:local
@@ -359,7 +359,7 @@ docker run -d --name mossland-shim --restart unless-stopped \
 docker run -d --name speakr --restart unless-stopped \
   --link mossland-shim:mossland-shim \
   -p 127.0.0.1:8899:8899 \
-  --env-file /home/siva/mossland-shim/speakr.env \
+  --env-file ./shim/speakr.env \
   -v speakr-data:/data \
   --memory 2g \
   learnedmachine/speakr:lite
@@ -388,9 +388,9 @@ Three keys are in use, stored in gitignored files:
 
 | Key | File | Used by | Where to rotate |
 |-----|------|---------|-----------------|
-| Mossland API | `/home/siva/mossland-shim/.env` | mossland-shim container | [studio.mosi.cn/app/api-keys](https://studio.mosi.cn/app/api-keys) |
-| Ollama cloud | `/home/siva/mossland-shim/speakr.env` | speakr container | [ollama.com/settings](https://ollama.com/settings) |
-| speakr API token | `/home/siva/speakr-mcp/.env` | speakr MCP server | speakr UI: Account > API Keys |
+| Mossland API | `./shim/.env` | mossland-shim container | [studio.mosi.cn/app/api-keys](https://studio.mosi.cn/app/api-keys) |
+| Ollama cloud | `./shim/speakr.env` | speakr container | [ollama.com/settings](https://ollama.com/settings) |
+| speakr API token | `./mcp/.env` | speakr MCP server | speakr UI: Account > API Keys |
 
 After rotating, update the file and restart the corresponding service.
 
@@ -398,15 +398,15 @@ After rotating, update the file and restart the corresponding service.
 
 | What | Path |
 |------|------|
-| MCP server source | `/home/siva/speakr-mcp/server.py` |
-| MCP server launcher | `/home/siva/speakr-mcp/run.sh` |
-| MCP server secrets | `/home/siva/speakr-mcp/.env` |
-| Mossland shim source | `/home/siva/mossland-shim/app.py` |
-| Mossland shim Dockerfile | `/home/siva/mossland-shim/Dockerfile` |
-| Mossland shim secrets | `/home/siva/mossland-shim/.env` |
-| speakr env (LLM + transcription) | `/home/siva/mossland-shim/speakr.env` |
-| Pi MCP config | `/home/siva/.pi/agent/mcp.json` |
-| This skill | `/home/siva/.pi/agent/skills/speakr/SKILL.md` |
+| MCP server source | `./mcp/server.py` |
+| MCP server launcher | `./mcp/run.sh` |
+| MCP server secrets | `./mcp/.env` |
+| Mossland shim source | `./shim/app.py` |
+| Mossland shim Dockerfile | `./shim/Dockerfile` |
+| Mossland shim secrets | `./shim/.env` |
+| speakr env (LLM + transcription) | `./shim/speakr.env` |
+| Pi MCP config | `~/.pi/agent/mcp.json` |
+| This skill | `~/.pi/agent/skills/speakr/SKILL.md` |
 | References | [references.md](references.md) |
 
 ## References

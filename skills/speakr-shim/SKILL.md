@@ -3,7 +3,7 @@ name: speakr-shim
 description: "How to build, modify, and swap the OpenAI-compatible transcription shim that sits between speakr and any STT provider. Use when changing the transcription backend (Mossland, WhisperX, Parakeet, Deepgram, etc.), adding model aliases, adjusting polling/timeout behavior, or debugging the transcription pipeline."
 license: MIT
 metadata:
-  author: siva
+  author: siva-sub
   version: '0.3.0'
 ---
 
@@ -61,7 +61,7 @@ This means **speakr never needs to know which STT provider is actually doing the
 
 ## The current shim: mossland-shim
 
-**Location:** `/home/siva/mossland-shim/`
+**Location:** `./shim/`
 
 **Upstream:** Mossland API (`https://api.mosi.cn/v1`)  
 **Model:** `moss-transcribe-diarize` (MOSS-Transcribe-Diarize 0.9B)
@@ -86,7 +86,7 @@ This means **speakr never needs to know which STT provider is actually doing the
 1. **Create a new shim directory:**
 
    ```bash
-   mkdir -p /home/siva/stt-shim-deepgram
+   mkdir -p ./stt-shim-deepgram
    ```
 
 2. **Write the shim** — copy the mossland-shim structure and change:
@@ -101,10 +101,10 @@ This means **speakr never needs to know which STT provider is actually doing the
 4. **Build and run:**
 
    ```bash
-   docker build -t stt-shim-deepgram:local /home/siva/stt-shim-deepgram
+   docker build -t stt-shim-deepgram:local ./stt-shim-deepgram
    docker run -d --name stt-shim-deepgram \
      -p 127.0.0.1:8002:8000 \
-     --env-file /home/siva/stt-shim-deepgram/.env \
+     --env-file ./stt-shim-deepgram/.env \
      stt-shim-deepgram:local
    ```
 
@@ -158,7 +158,7 @@ To use any of these, remove `TRANSCRIPTION_BASE_URL` (shim) from speakr.env and 
 
 ### Add a new model alias
 
-In `/home/siva/mossland-shim/app.py`, edit `MODEL_ALIASES`:
+In `./shim/app.py`, edit `MODEL_ALIASES`:
 
 ```python
 MODEL_ALIASES = {
@@ -173,13 +173,13 @@ MODEL_ALIASES = {
 Then rebuild:
 
 ```bash
-docker build -t mossland-shim:local /home/siva/mossland-shim
+docker build -t mossland-shim:local ./shim
 docker restart mossland-shim
 ```
 
 ### Change the polling interval / timeout
 
-In `/home/siva/mossland-shim/.env` or the docker run command:
+In `./shim/.env` or the docker run command:
 
 ```env
 POLL_INTERVAL_SECONDS=5.0    # poll every 5s instead of 2s (less API load)
@@ -309,7 +309,7 @@ Surface the upstream status code and body in the HTTPException detail. This make
 ### Rebuild the shim after code changes
 
 ```bash
-docker build -t mossland-shim:local /home/siva/mossland-shim
+docker build -t mossland-shim:local ./shim
 docker restart mossland-shim
 # Verify:
 curl -sS http://127.0.0.1:8001/healthz
@@ -368,12 +368,12 @@ Switch speakr between them by changing `TRANSCRIPTION_BASE_URL` in speakr.env an
 
 | What | Path |
 |------|------|
-| Mossland shim source | `/home/siva/mossland-shim/app.py` |
-| Mossland shim Dockerfile | `/home/siva/mossland-shim/Dockerfile` |
-| Mossland shim requirements | `/home/siva/mossland-shim/requirements.txt` |
-| Mossland shim secrets | `/home/siva/mossland-shim/.env` |
-| speakr env (connector + LLM config) | `/home/siva/mossland-shim/speakr.env` |
-| Docker compose (optional) | `/home/siva/mossland-shim/docker-compose.mossland-shim.yml` |
-| Shim README | `/home/siva/mossland-shim/README.md` |
+| Mossland shim source | `./shim/app.py` |
+| Mossland shim Dockerfile | `./shim/Dockerfile` |
+| Mossland shim requirements | `./shim/requirements.txt` |
+| Mossland shim secrets | `./shim/.env` |
+| speakr env (connector + LLM config) | `./shim/speakr.env` |
+| Docker compose (optional) | `./shim/docker-compose.mossland-shim.yml` |
+| Shim README | `./shim/README.md` |
 | speakr skill | [../speakr/SKILL.md](../speakr/SKILL.md) |
 | References | [references.md](references.md) |

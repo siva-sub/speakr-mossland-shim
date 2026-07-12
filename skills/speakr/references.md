@@ -9,15 +9,15 @@ that power the speakr + mossland-shim + MCP stack.
 
 | Component | Path |
 |-----------|------|
-| MCP server (35 tools, Python/FastMCP) | `/home/siva/speakr-mcp/server.py` |
-| MCP launcher (sets env, exec python3) | `/home/siva/speakr-mcp/run.sh` |
-| MCP secrets (speakr API token) | `/home/siva/speakr-mcp/.env` |
-| Mossland shim (FastAPI, OpenAI-compat proxy) | `/home/siva/mossland-shim/app.py` |
-| Mossland shim Dockerfile | `/home/siva/mossland-shim/Dockerfile` |
-| Mossland shim secrets (Mossland key) | `/home/siva/mossland-shim/.env` |
-| speakr container env (LLM + ASR config) | `/home/siva/mossland-shim/speakr.env` |
-| Pi MCP config (registers speakr server) | `/home/siva/.pi/agent/mcp.json` |
-| Pi skill (this document set) | `/home/siva/.pi/agent/skills/speakr/` |
+| MCP server (35 tools, Python/FastMCP) | `./mcp/server.py` |
+| MCP launcher (sets env, exec python3) | `./mcp/run.sh` |
+| MCP secrets (speakr API token) | `./mcp/.env` |
+| Mossland shim (FastAPI, OpenAI-compat proxy) | `./shim/app.py` |
+| Mossland shim Dockerfile | `./shim/Dockerfile` |
+| Mossland shim secrets (Mossland key) | `./shim/.env` |
+| speakr container env (LLM + ASR config) | `./shim/speakr.env` |
+| Pi MCP config (registers speakr server) | `~/.pi/agent/mcp.json` |
+| Pi skill (this document set) | `~/.pi/agent/skills/speakr/` |
 
 ---
 
@@ -25,7 +25,7 @@ that power the speakr + mossland-shim + MCP stack.
 
 | Container | Image | Port | Purpose |
 |-----------|-------|------|---------|
-| `mossland-shim` | `mossland-shim:local` (built from `/home/siva/mossland-shim/`) | `127.0.0.1:8001` | OpenAI-compat proxy → Mossland API. Accepts multipart, sends `async=true`, polls `/v1/audio/tasks/{id}`, returns segments with speaker labels. |
+| `mossland-shim` | `mossland-shim:local` (built from `./shim/`) | `127.0.0.1:8001` | OpenAI-compat proxy → Mossland API. Accepts multipart, sends `async=true`, polls `/v1/audio/tasks/{id}`, returns segments with speaker labels. |
 | `speakr` | `learnedmachine/speakr:lite` | `127.0.0.1:8899` | Web UI + REST API v1. Uses `openai_transcribe` connector pointed at the shim. LLM via Ollama cloud (glm-5.2). |
 
 ---

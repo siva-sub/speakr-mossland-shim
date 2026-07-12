@@ -1,7 +1,8 @@
 # Secrets — never commit these
 .env
-*.env.local
 speakr.env
+mcp/.env
+*.env.local
 
 # Python
 __pycache__/
@@ -10,4 +11,3 @@ __pycache__/
 
 # OS
 .DS_Store
-mcp/.env
