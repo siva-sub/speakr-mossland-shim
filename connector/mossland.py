@@ -394,6 +394,8 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
                     mode = _TRANSPORT_ASYNC  # fall through to async
 
             if mode in (_TRANSPORT_ASYNC, _TRANSPORT_AUTO) and not segments:
+                # Ensure stream=true is not set when using async polling
+                data.pop("stream", None)
                 try:
                     segments, full_text = self._transcribe_async(audio_bytes, files, data)
                 except Exception as e:
@@ -500,6 +502,8 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
         self, audio_bytes: bytes, files: dict, data: dict
     ) -> tuple[list[TranscriptionSegment], str]:
         """Transcribe via async task + polling (fallback mode)."""
+        # Remove stream param — can't use stream=true with async=true
+        data.pop("stream", None)
         data["async"] = "true"
 
         timeout = httpx.Timeout(connect=120.0, read=1800.0, write=300.0, pool=120.0)
