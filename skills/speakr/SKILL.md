@@ -274,9 +274,9 @@ Root cause of the chunking issue: the MOSS-TD model supports 90-min audio (128K 
 
 | Speaker | Accuracy | Segments |
 |---|---:|---:|
-| Maha | 87.8% | 626 |
-| Siva | 91.2% | 614 |
-| Jael | 76.9% | 234 |
+| Speaker 1 | 87.8% | 626 |
+| Speaker 2 | 91.2% | 614 |
+| Speaker 3 | 76.9% | 234 |
 
 ## Benchmark: MOSS-TD vs ElevenLabs Scribe 2
 

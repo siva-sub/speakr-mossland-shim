@@ -114,7 +114,7 @@ Reasoning model — fills `reasoning` field before `content`. Token budgets set 
 - Failed requests can still charge credits. The shim validates model + file size before forwarding.
 - **`platform.mosi.cn`** is a dashboard for monitoring API usage; the actual API gateway is `api.mosi.cn` (confirmed via the platform's `agwOrigin` config).
 - Cost: ~31.73 credits per 2-minute file ≈ ~16 credits/min.
-- **Speaker accuracy** (single-pass vs ElevenLabs Scribe 2 on 55-min recording): 95.4% agreement. Per-speaker: Maha 87.8%, Siva 91.2%, Jael 76.9%.
+- **Speaker accuracy** (single-pass vs ElevenLabs Scribe 2 on 55-min recording): 95.4% agreement. Per-speaker: Speaker 1 87.8%, Speaker 2 91.2%, Speaker 3 76.9%.
 
 ### Ollama cloud API (LLM)
 

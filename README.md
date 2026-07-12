@@ -308,7 +308,7 @@ See `speakr.env.example` for all options. Key settings:
 
 ## Benchmark
 
-55-min recording, 3 speakers (Maha, Siva, Jael), compared against ElevenLabs Scribe 2:
+55-min recording, 3 speakers (Speaker 1, Speaker 2, Speaker 3), compared against ElevenLabs Scribe 2:
 
 | Metric | ElevenLabs Scribe 2 | MOSS-TD (this shim) |
 |---|---:|---:|
@@ -319,7 +319,7 @@ See `speakr.env.example` for all options. Key settings:
 | Single-pass | Yes | Yes |
 | Cost | Per-minute SaaS | Mossland credits (~16/min) |
 
-Per-speaker accuracy: Maha 87.8%, Siva 91.2%, Jael 76.9%.
+Per-speaker accuracy: Speaker 1 87.8%, Speaker 2 91.2%, Speaker 3 76.9%.
 
 ## Why this exists
 
