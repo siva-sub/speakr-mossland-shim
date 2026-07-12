@@ -363,3 +363,60 @@ speakr's connector table currently shows:
 | **MOSS-TD (this shim)** | **Mossland API key** | **Yes** |
 
 Our approach uses speakr's existing `openai_transcribe` connector — no speakr code changes or PRs needed. If there's community interest, a native `mossland` connector could be contributed to speakr's registry (similar to how [SenseVoice was added](https://github.com/murtaza-nasir/speakr/pull/311)).
+
+## Native speakr connector (no shim needed)
+
+The `connector/` directory contains a **native speakr connector** (`mossland.py`) that eliminates the need for the separate shim container. speakr talks to the Mossland API directly with all the right params.
+
+### Installation (for speakr source deployments)
+
+1. Copy the connector into speakr's connectors directory:
+
+```bash
+cp connector/mossland.py /path/to/speakr/src/services/transcription/connectors/
+```
+
+2. Register it in speakr's `connectors/__init__.py`:
+
+```python
+from .mossland import MosslandTranscriptionConnector
+```
+
+3. Register in speakr's `registry.py` (in `_register_builtin_connectors`):
+
+```python
+self.register('mossland', MosslandTranscriptionConnector)
+```
+
+4. Configure speakr's env (see `connector/env.mossland.example`):
+
+```env
+TRANSCRIPTION_CONNECTOR=mossland
+TRANSCRIPTION_API_KEY=your-mossland-api-key
+TRANSCRIPTION_MODEL=moss-transcribe-diarize
+ENABLE_CHUNKING=false
+```
+
+### Shim vs native connector
+
+| | Shim (Docker Compose) | Native connector |
+|---|---|---|
+| Extra container | Yes (mossland-shim) | No |
+| speakr code changes | None | 3 files (copy + register) |
+| SSE streaming | ✅ | ✅ |
+| Single-pass 90-min | ✅ | ✅ |
+| 3-tier fallback | ✅ | ✅ |
+| Audio compression | ✅ (via MCP) | speakr's built-in |
+| Model aliases | ✅ (gpt-4o-transcribe-diarize) | Not needed (direct) |
+
+The shim is easier for Docker Compose deployments. The native connector is better for source deployments or if you want to contribute upstream to speakr.
+
+### Contributing upstream
+
+To submit this as a PR to speakr (like [SenseVoice #311](https://github.com/murtaza-nasir/speakr/pull/311)):
+
+1. Fork `murtaza-nasir/speakr`
+2. Copy `connector/mossland.py` to `src/services/transcription/connectors/mossland.py`
+3. Register in `__init__.py` and `registry.py`
+4. Add `config/env.mossland.example`
+5. Submit PR (CLA required — see speakr's `CONTRIBUTING.md`)
