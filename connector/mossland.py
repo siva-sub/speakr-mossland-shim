@@ -82,6 +82,16 @@ def _sanitize_segments(
     return segments
 DEFAULT_SAMPLING_PARAMS = '{"max_new_tokens":65536,"temperature":0}'
 
+# Transport modes (controllable via MOSSLAND_TRANSPORT env var):
+#   auto     — SSE streaming → async poll → 5-min chunking (default, cascading fallback)
+#   stream   — SSE streaming only (no fallback)
+#   async    — async polling only (no streaming, no chunking)
+#   chunk    — 5-min chunking only (most conservative, speaker labels may fragment)
+_TRANSPORT_AUTO = "auto"
+_TRANSPORT_STREAM = "stream"
+_TRANSPORT_ASYNC = "async"
+_TRANSPORT_CHUNK = "chunk"
+
 
 class MosslandTranscriptionConnector(BaseTranscriptionConnector):
     """Connector for MOSS-Transcribe-Diarize via the Mossland/MOSI API.
@@ -136,6 +146,18 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
         # If MOSSLAND_SAMPLING_PARAMS is set, use it; otherwise we scale
         # dynamically based on audio duration (see _scaled_max_new_tokens).
         self._fixed_sampling_params = os.environ.get("MOSSLAND_SAMPLING_PARAMS")
+        # Transport mode: controls which methods are used and fallback order.
+        # See _TRANSPORT_* constants above for available modes.
+        self.transport_mode = os.environ.get("MOSSLAND_TRANSPORT", _TRANSPORT_AUTO).lower()
+        # Polling config (for async fallback mode)
+        self.poll_interval = float(os.environ.get("MOSSLAND_POLL_INTERVAL", "5.0"))
+        self.poll_timeout = float(os.environ.get("MOSSLAND_POLL_TIMEOUT", "1800"))
+        # Chunking config (for last-resort fallback)
+        self.chunk_duration = int(os.environ.get("MOSSLAND_CHUNK_DURATION", "300"))
+        # Timestamp sanitization (from sglang-omni #1034)
+        self.sanitize_timestamps = os.environ.get(
+            "MOSSLAND_SANITIZE_TIMESTAMPS", "true"
+        ).lower() == "true"
 
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -205,16 +227,39 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
                 f"(duration={audio_duration:.0f}s, model={effective_model})"
             )
 
-            # Try SSE streaming first, fall back to async polling
-            try:
-                segments, full_text = self._transcribe_streaming(audio_bytes, files, data)
-            except Exception as e:
-                logger.warning(f"SSE streaming failed ({e}), falling back to async polling")
-                segments, full_text = self._transcribe_async(audio_bytes, files, data)
+            # Determine which transport modes to try, based on MOSSLAND_TRANSPORT
+            mode = self.transport_mode
+            segments: list[TranscriptionSegment] = []
+            full_text = ""
+
+            if mode in (_TRANSPORT_STREAM, _TRANSPORT_AUTO):
+                try:
+                    segments, full_text = self._transcribe_streaming(audio_bytes, files, data)
+                except Exception as e:
+                    if mode == _TRANSPORT_STREAM:
+                        raise
+                    logger.warning(f"SSE streaming failed ({e}), trying async polling")
+                    mode = _TRANSPORT_ASYNC  # fall through to async
+
+            if mode in (_TRANSPORT_ASYNC, _TRANSPORT_AUTO) and not segments:
+                try:
+                    segments, full_text = self._transcribe_async(audio_bytes, files, data)
+                except Exception as e:
+                    if mode == _TRANSPORT_ASYNC:
+                        raise
+                    logger.warning(f"Async polling failed ({e}), trying chunking")
+                    mode = _TRANSPORT_CHUNK  # fall through to chunking
+
+            if mode == _TRANSPORT_CHUNK and not segments:
+                if audio_duration > self.chunk_duration:
+                    segments, full_text = self._transcribe_chunked(audio_bytes, files, data, audio_duration)
+                else:
+                    raise TranscriptionError("All transport modes failed")
 
             # Sanitize timestamps: clamp any that exceed audio duration + 5s tolerance
             # (sglang-omni #1034: the model can emit corrupted end timestamps)
-            segments = _sanitize_segments(segments, audio_duration)
+            if self.sanitize_timestamps:
+                segments = _sanitize_segments(segments, audio_duration)
 
             # Build response
             speakers = list({s.speaker for s in segments if s.speaker})
@@ -329,8 +374,8 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
             logger.info(f"Async task created: {task_id}, polling...")
 
             # Poll for result
-            deadline = time.monotonic() + 1800  # 30 min max
-            poll_interval = 5.0
+            deadline = time.monotonic() + self.poll_timeout
+            poll_interval = self.poll_interval
 
             while True:
                 r = client.get(
@@ -369,6 +414,65 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
                     raise TranscriptionError(f"Mossland poll timeout for task {task_id}")
 
                 time.sleep(poll_interval)
+
+
+    def _transcribe_chunked(
+        self, audio_bytes: bytes, files: dict, data: str, audio_duration: float
+    ) -> tuple[list[TranscriptionSegment], str]:
+        """Transcribe by splitting audio into chunks (last-resort fallback).
+
+        Speaker labels may fragment across chunks — use only when streaming
+        and async polling both fail. Each chunk is sent via async polling.
+        """
+        import tempfile
+        import shutil
+
+        logger.warning(
+            f"Using chunked fallback: splitting {audio_duration:.0f}s audio "
+            f"into {self.chunk_duration}s segments (speaker labels may fragment)"
+        )
+
+        tmpdir = tempfile.mkdtemp(prefix="mossland_chunk_")
+        try:
+            input_path = os.path.join(tmpdir, "input")
+            with open(input_path, "wb") as f:
+                f.write(audio_bytes)
+
+            pattern = os.path.join(tmpdir, "chunk_%03d.mp3")
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", input_path, "-f", "segment",
+                 "-segment_time", str(self.chunk_duration),
+                 "-ar", "16000", "-ac", "1", "-b:a", "32k",
+                 "-reset_timestamps", "1", "-loglevel", "error", pattern],
+                capture_output=True, timeout=300,
+            )
+
+            from pathlib import Path
+            all_segments: list[TranscriptionSegment] = []
+            all_text: list[str] = []
+            for chunk_file in sorted(Path(tmpdir).glob("chunk_*.mp3")):
+                idx = int(chunk_file.stem.split("_")[1])
+                offset = idx * self.chunk_duration
+
+                with open(chunk_file, "rb") as cf:
+                    chunk_bytes = cf.read()
+
+                chunk_files = {"file": (chunk_file.name, chunk_bytes, "audio/mpeg")}
+                chunk_data = dict(data)
+                chunk_data.pop("stream", None)
+
+                segs, text = self._transcribe_async(chunk_bytes, chunk_files, chunk_data)
+
+                for seg in segs:
+                    seg.start_time = round((seg.start_time or 0) + offset, 2)
+                    seg.end_time = round((seg.end_time or 0) + offset, 2)
+                    all_segments.append(seg)
+                all_text.append(text)
+                logger.info(f"Chunk {idx} done: {len(segs)} segments")
+
+            return all_segments, " ".join(all_text)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     @staticmethod
     def available_models() -> list[str]:
