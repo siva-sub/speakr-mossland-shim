@@ -375,6 +375,18 @@ class MosslandTranscriptionConnector(BaseTranscriptionConnector):
             if mode in (_TRANSPORT_STREAM, _TRANSPORT_AUTO):
                 try:
                     segments, full_text = self._transcribe_streaming(audio_bytes, files, data)
+                    # Check for truncation: if the last segment ends well before
+                    # the audio duration, the SSE stream was cut short.
+                    if mode == _TRANSPORT_AUTO and audio_duration > 0 and segments:
+                        last_end = max((s.end_time or 0) for s in segments)
+                        if last_end < audio_duration * 0.9:  # < 90% coverage
+                            logger.warning(
+                                f"SSE stream truncated: last segment at {last_end:.0f}s "
+                                f"but audio is {audio_duration:.0f}s — falling back to async polling"
+                            )
+                            segments = []  # clear partial results, fall through to async
+                            full_text = ""
+                            mode = _TRANSPORT_ASYNC
                 except Exception as e:
                     if mode == _TRANSPORT_STREAM:
                         raise
