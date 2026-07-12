@@ -1,0 +1,12 @@
+# Secrets — never commit these
+.env
+*.env.local
+speakr.env
+
+# Python
+__pycache__/
+*.pyc
+.ruff_cache/
+
+# OS
+.DS_Store

@@ -1,0 +1,44 @@
+services:
+  mossland-shim:
+    build: ./shim
+    container_name: mossland-shim
+    restart: unless-stopped
+    env_file:
+      - shim/.env
+    environment:
+      - MOSI_BASE_URL=https://api.mosi.cn
+      - MOSI_DEFAULT_MODEL=moss-transcribe-diarize
+      - MODEL_VERSION=v20260410-streamparam-20260703
+      - USE_STREAMING=true
+      - SAMPLING_PARAMS={"max_new_tokens":65536,"temperature":0}
+      - MAX_UPLOAD_BYTES=104857600
+      - POLL_TIMEOUT_SECONDS=1800
+      - CHUNK_DURATION=300
+    ports:
+      - "127.0.0.1:8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  speakr:
+    image: learnedmachine/speakr:lite
+    container_name: speakr
+    restart: unless-stopped
+    depends_on:
+      mossland-shim:
+        condition: service_healthy
+    env_file:
+      - speakr.env
+    ports:
+      - "127.0.0.1:8899:8899"
+    volumes:
+      - speakr-data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+volumes:
+  speakr-data:
